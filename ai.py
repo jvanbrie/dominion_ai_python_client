@@ -2,6 +2,11 @@ from argparse import ArgumentParser
 import json
 from websocket import create_connection
 
+print_logs = False
+def log(*args):
+    if print_logs:
+        print(args)
+
 class State(object):
     def __init__(self) -> None:
         self.hand = []
@@ -15,14 +20,14 @@ class State(object):
         self.conn = None
 
     def __repr__(self) -> str:
-        return "${} | {} actions | {} buys | {} discard | {} deck | hand: {} | avg_draw_wo_action: {}".format(
+        return "${} | {} actions | {} buys | {} discard | avg_draw_wo_action: {} | deck: {} | hand: {} ".format(
             self.treasure, 
             self.actions, 
             self.buys, 
             self.discard, 
+            self.average_value_draw_without_action(),
             self.deck, 
             self.hand, 
-            self.average_value_draw_without_action(),
             )
     def average_value_draw_without_action(self) -> int:
         total_value = 0
@@ -46,9 +51,14 @@ class StrategyOne(Strategy):
         if state.treasure < 8:
             card_to_buy = "Gold"
         if state.treasure < 6:
+            if len(list(filter(lambda x: x == "Smithy", state.deck))) < 1:
+                card_to_buy = "Smithy"
+            else:
+                card_to_buy = "Silver"
+        if state.treasure < 4:
             card_to_buy = "Silver"
         if state.treasure < 3:
-            card_to_buy = "Copper"
+            return []
         return [card_to_buy]
 
 class StrategyTwo(Strategy):
@@ -57,7 +67,7 @@ class StrategyTwo(Strategy):
         if state.treasure < 8:
             card_to_buy = "Gold"
         if state.treasure < 6:
-            if len(list(filter(lambda x: x == "Militia", state.deck))) < 2:
+            if len(list(filter(lambda x: x == "Militia", state.deck))) < 1:
                 card_to_buy = "Militia"
             else:
                 card_to_buy = "Silver"
@@ -73,7 +83,7 @@ def action_phase(state):
         if state.actions < 1:
             break
         play_card(card, state)
-    playable = [card for card in state.hand if card in ["Militia"]]
+    playable = [card for card in state.hand if card in ["Militia", "Smithy"]]
     for card in playable:
         if state.actions < 1:
             break
@@ -92,7 +102,7 @@ def buy_phase(state, strategy):
 def play_card(card, state):
     state.payload["method"] = "Play"
     state.payload["params"] = {"card": card, "data": {}}
-    print("Playing", card)
+    log("Playing", card)
     state.conn.send(json.dumps(state.payload))
     action_response(state)
 
@@ -101,7 +111,7 @@ def buy_card(card, state):
     state.deck += [card]
     state.payload["method"] = "Buy"
     state.payload["params"] = {"card": card}
-    print("Buying", card)
+    log("Buying", card)
     state.conn.send(json.dumps(state.payload))
     action_response(state)
 
@@ -113,7 +123,7 @@ def action_response(state):
         exit(1)
     elif (result := response.get("result")) is not None:
         parse_response(state, result)
-        print(state)
+        log(state)
 
 def parse_response(state, response):
     state.hand = response["hand"]
@@ -132,8 +142,9 @@ def end_turn(state):
     if "params" in state.payload:
         state.payload.pop("params")
     state.conn.send(json.dumps(state.payload))
-    response = json.loads(state.conn.recv())
-    parse_response(state, response["result"])
+    if state.supply.get("Province", 0) != 0:
+        response = json.loads(state.conn.recv())
+        parse_response(state, response["result"])
 
 def handle_attack(state, request):
     default_card_value = 1
@@ -163,8 +174,11 @@ def handle_attack(state, request):
         print(request)
 
 
-def run_server(conn, player_number):
+def run_server(conn, player_number, number_of_rounds):
     state = State()
+    player_one_wins = 0
+    player_two_wins = 0
+    ties = 0
     if player_number == 1:
         strategy = StrategyOne()
     else:
@@ -188,7 +202,7 @@ def run_server(conn, player_number):
             exit(1)
         elif method == "StartTurn":
             parse_response(state, response["params"])
-            print(state)
+            log(state)
             state.payload = payload
             state.conn = conn
             action_phase(state)
@@ -202,9 +216,32 @@ def run_server(conn, player_number):
             handle_attack(state, response["params"])
         elif method == "GameOver":
             print(response["params"])
-            break
+            p1_score = response["params"]["scores"]["player1"] 
+            p2_score = response["params"]["scores"]["player2"]
+            if p1_score > p2_score:
+                 player_one_wins += 1
+            elif p1_score < p2_score:
+                player_two_wins += 1
+            else:
+                 ties += 1
+            number_of_rounds -= 1
+            if number_of_rounds <= 0:
+                payload_id = response["id"]
+                payload["id"] = payload_id
+                payload["result"] = {"rematch": False}
+                conn.send(json.dumps(payload))
+                break
+            else:
+                payload_id = response["id"]
+                payload["id"] = payload_id
+                payload["result"] = {"rematch": True}
+                conn.send(json.dumps(payload))
+                state = State()
         else:
             print(response)
+    print("Player 1 wins: {} | Ties: {} | Player 2 wins: {}".format(
+        player_one_wins, ties, player_two_wins
+        ))
     conn.close()
 
 
@@ -213,7 +250,9 @@ def main(args):
     parser.add_argument("--http_endpoint", action="store",
                         help="Dominai Endpoint with or without default name.", type=str)
     parser.add_argument("--player", action="store",
-                        help="Dominai player number", type=str)
+                        help="Dominai player number", type=int)
+    parser.add_argument("--number_of_rounds", action="store",
+                    help="Number of games to play", type=int, default=1)
     args = parser.parse_args(args)
     args_dict = vars(args)
 
@@ -226,7 +265,7 @@ def main(args):
 
     endpoint = parse_http_endpoint(args_dict["http_endpoint"])
     connection = make_connection(endpoint, args_dict["player"])
-    run_server(connection, int(args_dict["player"]))
+    run_server(connection, args_dict["player"], args_dict["number_of_rounds"])
 
 
 if __name__ == '__main__':
