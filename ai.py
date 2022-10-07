@@ -30,9 +30,9 @@ class State(object):
             if card == "Gold":
                 total_value += 3
             if card == "Silver":
-                total_value += 3
+                total_value += 2
             if card == "Copper":
-                total_value += 3
+                total_value += 1
         return total_value / len(self.deck)
             
 
