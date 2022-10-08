@@ -7,6 +7,12 @@ def log(*args):
     if print_logs:
         print(args)
 
+ordered_playable_cards = {
+    "Mine" : 1,
+    "Smithy" : 1,
+    "Militia" : 2
+}
+
 class State(object):
     def __init__(self) -> None:
         self.hand = []
@@ -67,11 +73,9 @@ class StrategyTwo(Strategy):
         if state.treasure < 8:
             card_to_buy = "Gold"
         if state.treasure < 6:
-            if len(list(filter(lambda x: x == "Militia", state.deck))) < 1:
-                card_to_buy = "Militia"
-            else:
-                card_to_buy = "Silver"
-        if state.treasure < 4:
+            if state.deck.count("Mine") < 1:
+                card_to_buy = "Mine"
+        if state.treasure < 5:
             card_to_buy = "Silver"
         if state.treasure < 3:
             return []
@@ -83,10 +87,12 @@ def action_phase(state):
         if state.actions < 1:
             break
         play_card(card, state)
-    playable = [card for card in state.hand if card in ["Militia", "Smithy"]]
+    playable = sorted([card for card in state.hand if card in ordered_playable_cards.keys()], key=(lambda x : ordered_playable_cards[x]))
     for card in playable:
         if state.actions < 1:
             break
+        if (card == "Mine" and len(list(filter(lambda x: (x == "Copper") or (x == "Silver"), state.hand))) == 0):
+            continue
         play_card(card, state)
 
 
@@ -101,7 +107,14 @@ def buy_phase(state, strategy):
 
 def play_card(card, state):
     state.payload["method"] = "Play"
-    state.payload["params"] = {"card": card, "data": {}}
+    if (card == "Mine"):
+        if "Silver" in state.hand:
+            card_data = {"trash": "Silver", "gain": "Gold"}
+        else:
+            card_data = {"trash": "Copper", "gain": "Silver"}
+    else:
+        card_data = {}
+    state.payload["params"] = {"card": card, "data": card_data}
     log("Playing", card)
     state.conn.send(json.dumps(state.payload))
     action_response(state)
