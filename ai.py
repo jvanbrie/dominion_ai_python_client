@@ -1,8 +1,9 @@
 from argparse import ArgumentParser
+from itertools import count
 import json
 from websocket import create_connection
 
-print_logs = False
+print_logs = True
 def log(*args):
     if print_logs:
         print(args)
@@ -73,12 +74,12 @@ class StrategyTwo(Strategy):
         if state.treasure < 8:
             card_to_buy = "Gold"
         if state.treasure < 6:
-            if state.deck.count("Mine") < 1:
-                card_to_buy = "Mine"
-        if state.treasure < 5:
             card_to_buy = "Silver"
-        if state.treasure < 3:
-            return []
+        if state.treasure < 4:
+            if len(list(filter(lambda x: x == "Chapel", state.deck))) < 1:
+                card_to_buy = "Chapel"
+            else:
+                return []
         return [card_to_buy]
 
 def action_phase(state):
@@ -107,6 +108,7 @@ def buy_phase(state, strategy):
 
 def play_card(card, state):
     state.payload["method"] = "Play"
+    
     if (card == "Mine"):
         if "Silver" in state.hand:
             card_data = {"trash": "Silver", "gain": "Gold"}
@@ -115,6 +117,19 @@ def play_card(card, state):
     else:
         card_data = {}
     state.payload["params"] = {"card": card, "data": card_data}
+
+    if card == "Chapel":
+        cards_to_trash = []
+        for hand_card in state.hand:
+            if hand_card == "Estate":
+                cards_to_trash += [hand_card] 
+                state.deck.remove(hand_card)
+            if hand_card == "Copper" and len(list(filter(lambda x: x == "Silver", state.deck))) >= 2:
+                cards_to_trash += [hand_card] 
+                state.deck.remove(hand_card)
+        state.payload["params"] = {"card": card, "data": cards_to_trash}
+    else:
+        state.payload["params"] = {"card": card, "data": {}}
     log("Playing", card)
     state.conn.send(json.dumps(state.payload))
     action_response(state)
@@ -274,7 +289,7 @@ def main(args):
         return ws_endpoint.split("?name=")[0]
 
     def make_connection(parsed_endpoint, player_number):
-        return create_connection(parsed_endpoint + "?name=player{}".format(player_number))
+        return create_connection(parsed_endpoint + "?name=player{}".format(player_number), timeout=1)
 
     endpoint = parse_http_endpoint(args_dict["http_endpoint"])
     connection = make_connection(endpoint, args_dict["player"])
